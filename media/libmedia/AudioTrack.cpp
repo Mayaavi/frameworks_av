@@ -603,19 +603,6 @@ uint32_t AudioTrack::getSampleRate() const
     }
 
     AutoMutex lock(mLock);
-
-    // sample rate can be updated during playback by the offloaded decoder so we need to
-    // query the HAL and update if needed.
-// FIXME use Proxy return channel to update the rate from server and avoid polling here
-    if (isOffloaded()) {
-        if (mOutput != 0) {
-            uint32_t sampleRate = 0;
-            status_t status = AudioSystem::getSamplingRate(mOutput, mStreamType, &sampleRate);
-            if (status == NO_ERROR) {
-                mSampleRate = sampleRate;
-            }
-        }
-    }
     return mSampleRate;
 }
 
@@ -879,8 +866,7 @@ status_t AudioTrack::createTrack_l(
     ALOGV("createTrack_l() output %d afLatency %d", output, afLatency);
 
     // The client's AudioTrack buffer is divided into n parts for purpose of wakeup by server, where
-    //  n = 1   fast track with single buffering; nBuffering is ignored
-    //  n = 2   fast track with double buffering
+    //  n = 1   fast track; nBuffering is ignored
     //  n = 2   normal track, no sample rate conversion
     //  n = 3   normal track, with sample rate conversion
     //          (pessimistic; some non-1:1 conversion ratios don't actually need triple-buffering)
@@ -1020,11 +1006,9 @@ status_t AudioTrack::createTrack_l(
             ALOGV("AUDIO_OUTPUT_FLAG_FAST successful; frameCount %u", frameCount);
             mAwaitBoost = true;
             if (sharedBuffer == 0) {
-                // Theoretically double-buffering is not required for fast tracks,
-                // due to tighter scheduling.  But in practice, to accommodate kernels with
-                // scheduling jitter, and apps with computation jitter, we use double-buffering.
-                if (mNotificationFramesAct == 0 || mNotificationFramesAct > frameCount/nBuffering) {
-                    mNotificationFramesAct = frameCount/nBuffering;
+                // double-buffering is not required for fast tracks, due to tighter scheduling
+                if (mNotificationFramesAct == 0 || mNotificationFramesAct > frameCount) {
+                    mNotificationFramesAct = frameCount;
                 }
             }
         } else {
@@ -1691,6 +1675,7 @@ status_t AudioTrack::restoreTrack_l(const char *from)
 
     // take the frames that will be lost by track recreation into account in saved position
     size_t position = mProxy->getPosition() + mProxy->getFramesFilled();
+    mNewPosition = position + mUpdatePeriod;
     size_t bufferPosition = mStaticProxy != NULL ? mStaticProxy->getBufferPosition() : 0;
     result = createTrack_l(mStreamType,
                            mSampleRate,
